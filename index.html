@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Management System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.5/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .pdf-viewer {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .docx-preview {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 16px;
+            background: #fafafa;
+        }
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        .file-card {
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        .file-card:hover {
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .upload-zone {
+            border: 2px dashed #d1d5db;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+        .upload-zone.dragover {
+            border-color: #3b82f6;
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        }
+        .preview-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        .preview-content {
+            background: white;
+            border-radius: 12px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow: auto;
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1001;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        const ResumeManager = () => {
+            const [files, setFiles] = useState([]);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [sortBy, setSortBy] = useState('name-asc');
+            const [previewFile, setPreviewFile] = useState(null);
+            const [previewContent, setPreviewContent] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const fileInputRef = useRef();
+            
+            // Configure PDF.js worker
+            useEffect(() => {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            }, []);
+            
+            const handleFileUpload = async (fileList) => {
+                const uploadedFiles = Array.from(fileList).filter(file => 
+                    file.type === 'application/pdf' || 
+                    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                    file.name.toLowerCase().endsWith('.pdf') ||
+                    file.name.toLowerCase().endsWith('.docx')
+                );
+                
+                const processedFiles = uploadedFiles.map(file => ({
+                    id: Date.now() + Math.random(),
+                    name: file.name,
+                    type: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+                    size: file.size,
+                    lastModified: new Date(file.lastModified),
+                    file: file
+                }));
+                
+                setFiles(prev => [...prev, ...processedFiles]);
+            };
+            
+            const handleDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const dt = e.dataTransfer;
+                handleFileUpload(dt.files);
+                e.target.classList.remove('dragover');
+            };
+            
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                e.target.classList.add('dragover');
+            };
+            
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                e.target.classList.remove('dragover');
+            };
+            
+            const previewPDF = async (file) => {
+                setIsLoading(true);
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                    const page = await pdf.getPage(1);
+                    
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    const viewport = page.getViewport({ scale: 1.5 });
+                    
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    
+                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+                    setPreviewContent(canvas.toDataURL());
+                } catch (error) {
+                    console.error('Error previewing PDF:', error);
+                    setPreviewContent('Error loading PDF preview');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            const previewDOCX = async (file) => {
+                setIsLoading(true);
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const result = await mammoth.convertToHtml({ arrayBuffer });
+                    setPreviewContent(result.value);
+                } catch (error) {
+                    console.error('Error previewing DOCX:', error);
+                    setPreviewContent('Error loading DOCX preview');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            const handlePreview = async (file) => {
+                setPreviewFile(file);
+                if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+                    await previewPDF(file.file);
+                } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.toLowerCase().endsWith('.docx')) {
+                    await previewDOCX(file.file);
+                }
+            };
+            
+            const handleDownload = (file) => {
+                const url = URL.createObjectURL(file.file);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = file.name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+            
+            const filteredAndSortedFiles = () => {
+                let filtered = files.filter(file =>
+                    file.name.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+                
+                return _.orderBy(filtered, 
+                    sortBy.includes('name') ? ['name'] : ['lastModified'],
+                    sortBy.includes('desc') ? ['desc'] : ['asc']
+                );
+            };
+            
+            const formatFileSize = (bytes) => {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            };
+            
+            const formatDate = (date) => {
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            };
+            
+            const getFileIcon = (file) => {
+                if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+                    return '📄';
+                } else {
+                    return '📝';
+                }
+            };
+            
+            if (files.length === 0) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+                        <div className="max-w-4xl mx-auto">
+                            <div className="text-center mb-8">
+                                <h1 className="text-4xl font-bold text-gray-900 mb-4">Resume Management System</h1>
+                                <p className="text-xl text-gray-600">Upload your resume collection to get started</p>
+                            </div>
+                            
+                            <div 
+                                className="upload-zone cursor-pointer"
+                                onDrop={handleDrop}
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onClick={() => fileInputRef.current?.click()}
+                            >
+                                <div className="text-6xl mb-4">📁</div>
+                                <h3 className="text-2xl font-semibold text-gray-700 mb-2">Upload Resume Files</h3>
+                                <p className="text-gray-500 mb-4">Drag and drop PDF or DOCX files here, or click to browse</p>
+                                <button className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                                    Choose Files
+                                </button>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    multiple
+                                    accept=".pdf,.docx"
+                                    onChange={(e) => handleFileUpload(e.target.files)}
+                                    className="hidden"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+            
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+                    <div className="max-w-7xl mx-auto">
+                        {/* Header */}
+                        <div className="text-center mb-8">
+                            <h1 className="text-4xl font-bold text-gray-900 mb-4">Resume Management System</h1>
+                            <p className="text-xl text-gray-600">{files.length} resumes loaded</p>
+                        </div>
+                        
+                        {/* Controls */}
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+                            <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                                <div className="flex flex-col md:flex-row gap-4 flex-1">
+                                    <div className="relative flex-1">
+                                        <input
+                                            type="text"
+                                            placeholder="Search resumes..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                        />
+                                        <div className="absolute left-3 top-3.5 text-gray-400">🔍</div>
+                                    </div>
+                                    
+                                    <select
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value)}
+                                        className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                        <option value="name-asc">Name A-Z</option>
+                                        <option value="name-desc">Name Z-A</option>
+                                        <option value="date-desc">Newest First</option>
+                                        <option value="date-asc">Oldest First</option>
+                                    </select>
+                                </div>
+                                
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                                >
+                                    Add More Files
+                                </button>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    multiple
+                                    accept=".pdf,.docx"
+                                    onChange={(e) => handleFileUpload(e.target.files)}
+                                    className="hidden"
+                                />
+                            </div>
+                        </div>
+                        
+                        {/* File Grid */}
+                        <div className="file-grid">
+                            {filteredAndSortedFiles().map(file => (
+                                <div key={file.id} className="file-card bg-white rounded-xl shadow-lg p-6 hover:shadow-xl">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div className="flex items-center">
+                                            <div className="text-2xl mr-3">{getFileIcon(file)}</div>
+                                            <div>
+                                                <h3 className="font-semibold text-gray-900 truncate" title={file.name}>
+                                                    {file.name}
+                                                </h3>
+                                                <p className="text-sm text-gray-500">
+                                                    {file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') ? 'PDF Document' : 'Word Document'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="space-y-2 mb-4 text-sm text-gray-600">
+                                        <div className="flex justify-between">
+                                            <span>Size:</span>
+                                            <span>{formatFileSize(file.size)}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span>Modified:</span>
+                                            <span>{formatDate(file.lastModified)}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => handlePreview(file)}
+                                            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                                        >
+                                            Preview
+                                        </button>
+                                        <button
+                                            onClick={() => handleDownload(file)}
+                                            className="flex-1 bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium"
+                                        >
+                                            Download
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        
+                        {filteredAndSortedFiles().length === 0 && searchTerm && (
+                            <div className="text-center py-12">
+                                <div className="text-4xl mb-4">🔍</div>
+                                <h3 className="text-xl font-semibold text-gray-700 mb-2">No resumes found</h3>
+                                <p className="text-gray-500">Try adjusting your search term</p>
+                            </div>
+                        )}
+                        
+                        {/* Preview Modal */}
+                        {previewFile && (
+                            <div className="preview-modal" onClick={() => setPreviewFile(null)}>
+                                <div className="preview-content" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                        onClick={() => setPreviewFile(null)}
+                                        className="close-btn hover:bg-black transition-colors"
+                                    >
+                                        ✕
+                                    </button>
+                                    
+                                    <div className="p-6">
+                                        <h2 className="text-2xl font-bold text-gray-900 mb-4">{previewFile.name}</h2>
+                                        
+                                        {isLoading ? (
+                                            <div className="flex items-center justify-center py-12">
+                                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                                                <span className="ml-4 text-gray-600">Loading preview...</span>
+                                            </div>
+                                        ) : (
+                                            <div className="preview-area">
+                                                {previewFile.type === 'application/pdf' || previewFile.name.toLowerCase().endsWith('.pdf') ? (
+                                                    <div className="pdf-viewer">
+                                                        {previewContent && (
+                                                            <img 
+                                                                src={previewContent} 
+                                                                alt="PDF Preview" 
+                                                                className="w-full h-auto"
+                                                            />
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div 
+                                                        className="docx-preview"
+                                                        dangerouslySetInnerHTML={{ __html: previewContent }}
+                                                    />
+                                                )}
+                                            </div>
+                                        )}
+                                        
+                                        <div className="flex gap-4 mt-6">
+                                            <button
+                                                onClick={() => handleDownload(previewFile)}
+                                                className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                                            >
+                                                Download
+                                            </button>
+                                            <button
+                                                onClick={() => setPreviewFile(null)}
+                                                className="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700 transition-colors font-medium"
+                                            >
+                                                Close
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+        
+        ReactDOM.render(<ResumeManager />, document.getElementById('root'));
+    </script>
+</body>
+</html>
